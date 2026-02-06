@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTransactions, useCreateTransaction, useDeleteTransaction, useAccounts, useCategories } from '../hooks/useData';
 import { formatCurrency, formatDate } from '../utils/dateUtils';
 import { Virtuoso } from 'react-virtuoso';
@@ -11,6 +11,15 @@ export default function Transactions() {
   const [filterType, setFilterType] = useState<string>('all');
   const [filterAccount, setFilterAccount] = useState<string>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('daily');
+  
+  // Date range navigation
+  const now = new Date();
+  const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentYear = now.getFullYear();
+  
+  const [displayMonth, setDisplayMonth] = useState(currentMonth);
+  const [displayYear, setDisplayYear] = useState(currentYear);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const { data: transactions = [] } = useTransactions();
   const { data: accounts = [] } = useAccounts();
@@ -30,6 +39,22 @@ export default function Transactions() {
   const filteredTransactions = transactions.filter((t: any) => {
     if (filterType !== 'all' && t.type !== filterType) return false;
     if (filterAccount !== 'all' && t.accountId !== filterAccount) return false;
+    
+    // Filter by date range based on view mode
+    const txnDate = new Date(t.date);
+    if (viewMode === 'daily' || viewMode === 'weekly') {
+      // Daily and Weekly: only show transactions in current month
+      if (txnDate.getFullYear() !== currentMonth.getFullYear() || 
+          txnDate.getMonth() !== currentMonth.getMonth()) {
+        return false;
+      }
+    } else if (viewMode === 'monthly') {
+      // Monthly: only show transactions in current year
+      if (txnDate.getFullYear() !== displayYear) {
+        return false;
+      }
+    }
+    
     return true;
   });
 
@@ -99,6 +124,30 @@ export default function Transactions() {
   const groupedTransactions = groupTransactionsByPeriod(filteredTransactions);
   const sortedGroups = Object.keys(groupedTransactions).sort((a, b) => b.localeCompare(a)); // Most recent first
 
+  // Initialize expanded groups based on view mode
+  const [initializedGroups, setInitializedGroups] = useState(false);
+  useMemo(() => {
+    if (!initializedGroups && sortedGroups.length > 0) {
+      // For monthly view, collapse all. For daily/weekly, expand all
+      if (viewMode === 'monthly') {
+        setExpandedGroups(new Set());
+      } else {
+        setExpandedGroups(new Set(sortedGroups));
+      }
+      setInitializedGroups(true);
+    }
+  }, [sortedGroups, viewMode, initializedGroups]);
+
+  const toggleGroup = (groupKey: string) => {
+    const newExpanded = new Set(expandedGroups);
+    if (newExpanded.has(groupKey)) {
+      newExpanded.delete(groupKey);
+    } else {
+      newExpanded.add(groupKey);
+    }
+    setExpandedGroups(newExpanded);
+  };
+
   const listItems = useMemo(() => {
     const items: Array<
       | {
@@ -107,6 +156,7 @@ export default function Transactions() {
           label: string;
           income: number;
           expense: number;
+          isExpanded: boolean;
         }
       | { type: 'txn'; txn: any }
     > = [];
@@ -120,21 +170,26 @@ export default function Transactions() {
         .filter((t: any) => t.type === 'expense')
         .reduce((sum: number, t: any) => sum + t.amount, 0);
 
+      const isExpanded = expandedGroups.has(groupKey);
       items.push({
         type: 'group',
         key: groupKey,
         label: getGroupLabel(groupKey),
         income: totalIncome,
         expense: totalExpense,
+        isExpanded,
       });
 
-      groupTransactions.forEach((txn: any) => {
-        items.push({ type: 'txn', txn });
-      });
+      // Only include transactions if group is expanded
+      if (isExpanded) {
+        groupTransactions.forEach((txn: any) => {
+          items.push({ type: 'txn', txn });
+        });
+      }
     });
 
     return items;
-  }, [groupedTransactions, sortedGroups, viewMode]);
+  }, [groupedTransactions, sortedGroups, viewMode, expandedGroups]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,6 +372,39 @@ export default function Transactions() {
           </button>
       </div>
 
+      {/* Date Navigation */}
+      <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg p-3">
+        <button
+          onClick={() => {
+            if (viewMode === 'monthly') {
+              setDisplayYear(displayYear - 1);
+            } else {
+              setDisplayMonth(new Date(displayMonth.getFullYear(), displayMonth.getMonth() - 1, 1));
+            }
+          }}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <ChevronLeft size={20} />
+        </button>
+        
+        <div className="text-center font-semibold text-gray-900">
+          {viewMode === 'monthly' ? displayYear : displayMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+        </div>
+        
+        <button
+          onClick={() => {
+            if (viewMode === 'monthly') {
+              setDisplayYear(displayYear + 1);
+            } else {
+              setDisplayMonth(new Date(displayMonth.getFullYear(), displayMonth.getMonth() + 1, 1));
+            }
+          }}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <ChevronRight size={20} />
+        </button>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1">
@@ -363,25 +451,36 @@ export default function Transactions() {
                   return (
                     <div
                       key={`group-${item.key}`}
-                      className="bg-gray-50 border-b px-3 py-2"
+                      className="border-b border-gray-200 dark:border-gray-200 px-3 py-3 sticky top-0"
                     >
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-xs font-semibold text-gray-700 uppercase">
-                          {item.label}
-                        </h3>
-                        <div className="flex gap-3 text-xs">
+                      <button
+                        onClick={() => toggleGroup(item.key)}
+                        className="accordion-btn w-full flex items-center justify-between gap-2 bg-gray-50 dark:bg-gray-50 hover:bg-gray-100 dark:hover:bg-gray-100 transition-colors rounded px-2 py-1 focus:outline-none focus:ring-0 focus:border-0 active:ring-0"
+                      >
+                        <div className="flex items-center gap-2 flex-1 text-left">
+                          <ChevronDown
+                            size={20}
+                            className={`flex-shrink-0 transition-transform text-gray-900 ${
+                              item.isExpanded ? 'rotate-0' : '-rotate-90'
+                            }`}
+                          />
+                          <h3 className="text-lg font-bold text-gray-900">
+                            {item.label}
+                          </h3>
+                        </div>
+                        <div className="flex gap-3 text-sm">
                           {item.income > 0 && (
-                            <span className="text-green-600 font-medium">
+                            <span className="text-green-600 font-semibold">
                               +{formatCurrency(item.income, 'PHP')}
                             </span>
                           )}
                           {item.expense > 0 && (
-                            <span className="text-red-600 font-medium">
+                            <span className="text-red-600 font-semibold">
                               -{formatCurrency(item.expense, 'PHP')}
                             </span>
                           )}
                         </div>
-                      </div>
+                      </button>
                     </div>
                   );
                 }
